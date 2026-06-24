@@ -11,17 +11,18 @@ const {
     generateDetailsFromImage,
     semanticSearch
 } = require('../controllers/productController');
-
+const authenticate = require('../middleware/authenticate');
+const authorizeroles=require('../middleware/authorization');
 router.get('/search/semantic', semanticSearch);
 
 router.route('/')
     .get(getProducts)
-    .post(createProduct);
+    .post(authenticate, authorizeroles('admin'), createProduct);
 
 router.route('/:id')
-    .get(getProductById)
-    .put(updateProduct)
-    .delete(deleteProduct);
+    .get(authenticate, authorizeroles('admin', 'user'), getProductById)
+    .put(authenticate, authorizeroles('admin'), updateProduct)
+    .delete(authenticate, authorizeroles('admin'), deleteProduct);
 
 router.post("/generate-description", generateDescription);
 
@@ -33,5 +34,4 @@ const upload = multer({
 
 router.route('/generate-details-from-image')
     .post(upload.single('image'), generateDetailsFromImage);
-
 module.exports = router;

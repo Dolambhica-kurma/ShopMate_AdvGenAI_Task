@@ -19,7 +19,8 @@ const Home = () => {
     }, [products, filter]);
 
     if (loading) return <div className="flex justify-center items-center h-screen">Loading...</div>;
-
+    console.log(filteredProducts);
+    console.log(typeof filteredProducts);
     return (
         <div className="min-h-screen bg-gray-50">
             {/* Hero Section */}
@@ -99,6 +100,7 @@ const Home = () => {
                         No products found in this category.
                     </div>
                 )}
+                
             </div>
         </div>
     );

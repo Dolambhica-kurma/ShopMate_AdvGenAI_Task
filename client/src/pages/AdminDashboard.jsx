@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import api from '/utils/api';
 import axios from 'axios';
 import { Trash2, Edit, Plus, X, Save, Wand2, Camera } from 'lucide-react';
 
@@ -24,7 +25,7 @@ const AdminDashboard = () => {
 
     const fetchProducts = async () => {
         try {
-            const response = await axios.get('http://localhost:3001/api/products');
+            const response = await api.get('http://localhost:3001/api/products');
             setProducts(response.data);
         } catch (error) {
             console.error('Error fetching products:', error);
