@@ -2,6 +2,8 @@ const bcrypt=require('bcrypt');
 const jwt=require('jsonwebtoken');
 const {getDB}=require('../config/db');
 const {sendVerificationEmail,sendEmail}=require('../services/sendermail');
+
+
 const registerUser=async(req,res)=>{
     try{
         const {name,email,password,role,phone_number}=req.body;
@@ -65,6 +67,8 @@ const registerUser=async(req,res)=>{
         });
     }
 };
+
+
 
 const generateAccessToken=(user)=>{
     return jwt.sign(
@@ -162,6 +166,60 @@ catch (error){
 }
 
 };
+
+
+const sendPasswordResetEmail=async(req,res)=>{
+    try{
+        const {email}=req.body;
+        if(!email){
+            return res.status(400).json({message:'Email is required'});
+        }
+
+        const db=getDB();
+        const userCollection=db.collection('users');
+
+        const normalizedEmail=email.toLowerCase();
+        const user=await userCollection.findOne({email: normalizedEmail});
+        if(!user){
+            return res.status(404).json({message:'User not found'});
+        }
+
+        const otp = Math.floor(100000 + Math.random() * 900000).toString();
+        const otpHash = await bcrypt.hash(otp, 10);
+        const expiresAt = new Date(Date.now() + 15 * 60 * 1000);
+
+        console.log(`forgot password requested for ${normalizedEmail}. Generate OTP: ${otp}`);
+        await userCollection.updateOne(
+            {_id : user._id},
+            {
+                $set: {
+                    reset_password_otp: otpHash,
+                    reset_password_otp_expires_at: expiresAt,
+                    updated_At: new Date(),
+                },
+            }
+        );
+
+        const emailResult = await sendEmail({
+            to: normalizedEmail,
+            subject: 'ShopMATE Password Reset OTP',
+            text: `Your OTP for password reset is: ${otp}. It will expire in 15 minutes.`,
+            html: `<p>Your OTP for password reset is: <strong>${otp}</strong>. It will expire in 15 minutes.</p>`,
+        });
+        console.log(`Forgot password email sent:`, emailResult && emialResult.response);
+
+
+        return res.status(200).json({message:'Password reset OTP sent to email'});
+    }catch(error){
+        console.error(`Forgot password error:`, error);
+        return res.status(500).json({message:'Could not send otp', error: error.message});
+    }
+};
+    
+
+        
+
+
 module.exports={
     registerUser,
     loginUser,

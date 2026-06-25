@@ -15,7 +15,7 @@ const ShopMateChatbot = () => {
             // Add user message to history
             historyRef.current.push({ role: 'user', content: userQuestion });
 
-            const response = await axios.post( '/ai/agent', {
+            const response = await api.post('/ai/agent', {
                 message: userQuestion,// Send full history
             });
 
