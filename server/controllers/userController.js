@@ -1,81 +1,68 @@
 const bcrypt=require('bcrypt');
 const jwt=require('jsonwebtoken');
 const {getDB}=require('../config/db');
-const {sendVerificationEmail,sendEmail}=require('../services/sendermail');
-
-
+const {sendVerificationEmail, sendEmail}=require("../services/sendermail");
 const registerUser=async(req,res)=>{
     try{
-        const {name,email,password,role,phone_number}=req.body;
-
-        if(!name || !email || !password){
-            return res.status(400).json({message:'Name, email, and password are required'});
-        }
-
-        if(!process.env.JWT_SECRET){
-            throw new Error('JWT_SECRET environment variable is required');
-        }
-
+        const {name,email,password,phone_number,role}=req.body;
         const db=getDB();
         const normalizedEmail=email.toLowerCase();
         const existingUser=await db.collection('users').findOne({email: normalizedEmail});
         if(existingUser){
             return res.status(400).json({message:'User already exists'});
         }
-
         const hashedPassword=await bcrypt.hash(password,10);
         const result=await db.collection('users').insertOne({
             name,
             email: normalizedEmail,
-            phone_number: phone_number || "",
             password:hashedPassword,
+            phone_number: phone_number || " ",
             role: role || 'user',
             isVerified: false,
             createdAt: new Date()
         });
-
-        const token=jwt.sign(
+        const jwtSecret = process.env.JWT_SECRET || 'shopmate_dev_secret';
+        const token = jwt.sign(
             {
-                userId: result.insertedId,
-                email: normalizedEmail
-            },
-            process.env.JWT_SECRET,
-            {
-                expiresIn: '1d'
-            }
-        );
-
-        let emailSent = true;
+            userId: result.insertedId,
+            email: normalizedEmail
+            }, 
+            jwtSecret,
+             {expiresIn: '1d'}
+            );
+        
         try {
-            await sendVerificationEmail(normalizedEmail, name, token);
-        } catch (emailError) {
-            emailSent = false;
-            console.error('EMAIL SEND ERROR:', emailError);
+            await sendVerificationEmail(normalizedEmail,name, token);
+        } catch (mailError) {
+            console.error('Verification email could not be sent:', mailError.message);
+            return res.status(500).json({
+                message: 'Registration failed because the verification email could not be sent. Please configure SMTP or use a valid Google App Password.'
+            });
         }
-
         res.status(201).json({
-            message: emailSent
-                ? 'User registered successfully. Please check your email to verify your account.'
-                : 'User registered successfully, but verification email could not be sent. Please contact support.',
+            message: 'User registered successfully. Please verify your account using the email sent to you.'
         });
     }
-    catch(error){
-        console.error('REGISTER ERROR:', error);
-        res.status(500).json({
-            message:'Server Error',
-            error: error.message
-        });
-    }
+        catch(error){
+            res.status(500).json({
+                message:'Server Error',
+                error: error.message
+            });
+        }
+        
+    
+};
+module.exports={
+    registerUser
 };
 
-
-
+const e = require('express');
 const generateAccessToken=(user)=>{
     return jwt.sign(
         {id: user._id,
          email: user.email,
          role: user.role},
-         process.env.ACCESS_TOKEN_SECRET || 'access_secret_key',
+         "access_secret_key",
          {expiresIn:'15m'}
     );
 };
@@ -84,7 +71,7 @@ const generateRefreshToken=(user)=>{
         {id: user._id,
          email: user.email,
          role: user.role},
-         process.env.REFRESH_TOKEN_SECRET || 'refresh_secret_key',
+         "refresh_secret_key",
          {expiresIn:'7d'}
     );
 };
@@ -97,12 +84,13 @@ const loginUser=async(req,res)=>{
         if(!user){
             return res.status(400).json({message:'Invalid email'});
         }
-        if(!user.isVerified){
-            return res.status(401).json({message:'Email not verified. Please check your email for verification link.'});
+        const isAutoVerified = typeof user.verificationNote === 'string' && user.verificationNote.includes('Auto-verified');
+        if(!user.isVerified || isAutoVerified){
+            return res.status(400).json({message:'Please verify your email before logging in'});
         }
         const isMatch=await bcrypt.compare(password,user.password);
         if(!isMatch){
-            return res.status(401).json({message:'Invalid password'});
+            return res.status(400).json({message:'Invalid password'});
         }
         const accessToken=generateAccessToken(user);
         const refreshToken=generateRefreshToken(user);
@@ -167,61 +155,103 @@ catch (error){
 
 };
 
-
-const sendPasswordResetEmail=async(req,res)=>{
+const sendPasswordResetOTP=async(req,res)=>{
     try{
+        if (!req.body) {
+            return res.status(400).json({message:'Request body is empty'});
+        }
         const {email}=req.body;
-        if(!email){
+         if(!email){
             return res.status(400).json({message:'Email is required'});
         }
-
         const db=getDB();
-        const userCollection=db.collection('users');
-
+        const usersCollection=db.collection('users');
         const normalizedEmail=email.toLowerCase();
-        const user=await userCollection.findOne({email: normalizedEmail});
+        const user=await usersCollection.findOne({email: normalizedEmail});
         if(!user){
-            return res.status(404).json({message:'User not found'});
+            return res.status(404).json({message:'No account found for this email'});
+    }
+    const otp = Math.floor(100000 + Math.random() *900000).toString();
+    const otpHash = await bcrypt.hash(otp, 10);
+    const expiresAt = new Date(Date.now() + 15 * 60* 1000);
+    console.log(`Forgot password requested for ${normalizedEmail}. Generated OTP: ${otp}.`);
+    await usersCollection.updateOne(
+        { _id: user._id },
+        { $set: {
+            reset_password_otp_hash: otpHash,
+            reset_password_otp_expires_at: expiresAt,
+            updatedAt: new Date(),
+        },
+    }
+);
+const emailResult = await sendEmail({
+    to: normalizedEmail,
+    subject: 'ShopMATE Password Reset OTP',
+    text: `Your password reset OTP is: ${otp}. It expires in 15 minutes.`,
+    html: `<p>Your password reset OTP is: </p><h2>${otp}</h2><p>This code expires in 15 minutes.</p>`,
+});
+console.log('Forgot password email sent:', emailResult && emailResult.response);
+return res.status(200).json({message:'OTP sent to your email address'});
+} catch(error){
+    console.error('Forgot password error:', error);
+    return res.status(500).json({message:'Could not send OTP', error: error.message});
+}  
+};
+
+const resetPassword = async (req,res) => {
+    try{
+        if (!req.body) {
+            return res.status(400).json({message:'Request body is empty'});
         }
-
-        const otp = Math.floor(100000 + Math.random() * 900000).toString();
-        const otpHash = await bcrypt.hash(otp, 10);
-        const expiresAt = new Date(Date.now() + 15 * 60 * 1000);
-
-        console.log(`forgot password requested for ${normalizedEmail}. Generate OTP: ${otp}`);
+        const {email, otp, newPassword, confirmPassword } = req.body;
+        if(!email || !otp || !newPassword || !confirmPassword) {
+            return res.status(400).json({ message: 'All fields are rquired.' });
+        }
+        if(newPassword !== confirmPassword) {
+            return res.status(400).json({ message: 'New Password and confirm password must match.'});
+        }
+        const db = getDB();
+        const userCollection = db.collection('users');
+        const normalizedEmail = email.toLowerCase();
+        const user = await userCollection.findOne({ email: normalizedEmail });
+        if(!user){
+            return res.status(400).json({ message: 'No account found for this email.' });
+        }
+        if(!user.reset_password_otp_hash || !user.reset_password_otp_expires_at){
+            return res.status(400).json({ message: 'No pending password reset request found.' });
+        }
+        const otpExpired = new Date() > new Date(user.reset_password_otp_expires_at);
+        if(otpExpired){
+            return res.status(400).json({ message: 'The OTP has expired. Please request a new one.' });
+        }
+        const validOtp = await bcrypt.compare(otp, user.reset_password_otp_hash);
+        if(!validOtp){
+            return res.status(400).json({ message: 'Invalid OTP provided.' });
+        }
+        const hashedPassword = await bcrypt.hash(newPassword, 10);
         await userCollection.updateOne(
-            {_id : user._id},
+            { _id: user._id },
             {
                 $set: {
-                    reset_password_otp: otpHash,
-                    reset_password_otp_expires_at: expiresAt,
-                    updated_At: new Date(),
+                    password: hashedPassword,
+                    refreshToken: null,
+                    reset_password_otp_hash: null,
+                    reset_password_otp_expires_at: null,
+                    updated_at: new Date(),
                 },
             }
         );
-
-        const emailResult = await sendEmail({
-            to: normalizedEmail,
-            subject: 'ShopMATE Password Reset OTP',
-            text: `Your OTP for password reset is: ${otp}. It will expire in 15 minutes.`,
-            html: `<p>Your OTP for password reset is: <strong>${otp}</strong>. It will expire in 15 minutes.</p>`,
-        });
-        console.log(`Forgot password email sent:`, emailResult && emialResult.response);
-
-
-        return res.status(200).json({message:'Password reset OTP sent to email'});
-    }catch(error){
-        console.error(`Forgot password error:`, error);
-        return res.status(500).json({message:'Could not send otp', error: error.message});
+        return res.status(200).json({ message: 'Password updated successfully. Please login with your new password.' });
+    } catch(error){
+        console.error('Reset password error:', error);
+        return res.status(500).json({ message: 'Password reset failed.', error: error.message});
     }
 };
-    
-
-        
-
 
 module.exports={
     registerUser,
     loginUser,
-    refreshUserToken
+    refreshUserToken,
+    sendPasswordResetOTP,
+    resetPassword
 };
